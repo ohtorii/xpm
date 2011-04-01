@@ -1,0 +1,687 @@
+/*XPMファイルを秀丸エディタで表示するマクロ
+
+＊初めに
+    画像ファイルフォーマットのXPMを秀丸で表示するマクロです。
+    そもそも、「強調表示・カラーマーカー」を使用して無理矢理表示しているため
+    動作は遅いです。
+    アイコンサイズは一瞬で変換できますが、ＨＤサイズは画像を表示するまで数分
+    かかります。
+
+＊機能
+    256色までの色数に対応。
+    透過色に対応
+    色指定はRGB(24/48bit)・色名(red/green...)に対応
+
+＊ファイル
+    xpm.mac             このファイルです
+    xpm_rgb.ini         色の名前からRGB値へ変換するためのファイル。
+
+＊インストール
+    上記2ファイルを秀丸エディタのマクロディレクトリにコピーしてください。
+
+＊動かし方
+    XMPファイルを秀丸で読み込んでください。
+    このマクロを実行すると画像に変換されます。
+
+＊必要な外部ライブラリ
+    田楽(でんがく)ＤＬＬ
+    http://www.ceres.dti.ne.jp/~sugiura/
+    
+＊動作確認した環境
+    秀丸                    v8.03
+    田楽(でんがく)ＤＬＬ    v3.20
+
+＊連絡先
+    http://d.hatena.ne.jp/ohtorii/
+*/
+
+
+////////////////////////////////////////////////////////////////////////
+//		ユーザーカスタマイズ
+////////////////////////////////////////////////////////////////////////
+/*	フォント名＋フォントサイズ(単位はポイント)
+表示が崩れるときは変更してください、どう変更すればいいのかはよく分かりませんが・・・
+*/
+$g_font_config	= "xFont:(ＭＳ ゴシック) xFontPoint:1 xFontDecimal:0";
+//$g_font_config	= "xFont:(Small Fonts) xFontPoint:2 xFontDecimal:3";
+
+//進行状況をタイトルに表示するかどうか。
+//パレット数が多いと（256色とか）表示までに時間がかかります。
+#g_enable_progress	= true;
+
+//pixel以外の部分を折りたたむかどうか
+//true	折りたたむ
+//false	折りたたまない（画面右上にパレット定義が表示されたままになります。）
+#g_enable_fold		= true;
+
+//カラーマーカーを使用するかどうか
+//色再現が正確だが速度は遅い。
+#g_use_color_marker = true;
+
+
+
+////////////////////////////////////////////////////////////////////////
+//		マクロ本体
+////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////
+//マクロ中で書き換える変数
+////////////////////////////////////////
+#g_width		= 0;	//幅
+#g_height		= 0;	//高さ
+#g_colors		= 0;	//色数
+#g_cpp			= 0;	//1ピクセルあたりの文字数（大抵は1か2）
+#g_tok_len  	= 0;
+$g_tok_str[0]	= "";
+
+//パレット（#g_colors個）
+$g_palette_char[0]	= "";
+$g_palette_color[0]	= "";	//BGR(BBGGRR)
+
+//テンポラリファイル（絶対パス）
+$g_tmp_filename 	= "";
+
+//pixle最上段の行位置
+#g_pixel_top_line 	= 0;
+
+
+////////////////////////////////////////
+//マクロ中で書き換えない定数
+////////////////////////////////////////
+$g_dengaku_color_ini		= "xpm_rgb.ini";
+#g_width_min				= 80;
+
+//最大何色まで使用可能か
+//この数値を変更したら、$g_hilight_color_tbl と $g_hilight_char_tblを変更すること。
+#g_max_color				= 12;
+
+//highlight指定のための色テーブル（配列長は、#g_max_color 個）
+$g_hilight_color_tbl[0] 	= "4"; 		//強調1
+$g_hilight_color_tbl[1] 	= "7"; 		//強調2
+$g_hilight_color_tbl[2] 	= "22"; 	//強調3
+$g_hilight_color_tbl[3] 	= "23"; 	//強調4
+$g_hilight_color_tbl[4] 	= "36"; 	//強調5
+$g_hilight_color_tbl[5] 	= "37"; 	//強調6
+$g_hilight_color_tbl[6] 	= "38"; 	//強調7
+$g_hilight_color_tbl[7] 	= "39"; 	//強調8
+$g_hilight_color_tbl[8] 	= "5"; 		//特に強調1
+$g_hilight_color_tbl[9] 	= "8"; 		//特に強調2
+$g_hilight_color_tbl[10]	= "40"; 	//特に強調3
+$g_hilight_color_tbl[11]	= "41"; 	//特に強調4
+
+//強調表示ファイルで使用する定義（配列長は、#g_max_color 個）
+$g_hilight_char_tbl[0]		= "01,";	//強調表示１
+$g_hilight_char_tbl[1]		= "65,";
+$g_hilight_char_tbl[2]		= "129,";
+$g_hilight_char_tbl[3]		= "193,";
+$g_hilight_char_tbl[4]		= "259,";
+$g_hilight_char_tbl[5]		= "323,";
+$g_hilight_char_tbl[6]		= "387,";
+$g_hilight_char_tbl[7]		= "451,";	//強調表示８
+$g_hilight_char_tbl[8]		= "03,";	//特に強調表示１
+$g_hilight_char_tbl[9]		= "67,";
+$g_hilight_char_tbl[10]		= "131,";
+$g_hilight_char_tbl[11]		= "195,";	//特に強調表示４
+
+
+//テンポラリファイル名（ベース名）
+//環境変数TMPのディレクトリに生成する。
+$g_tmpfile_base_name 	= "hidemaru_xpm_tmp";
+
+
+
+
+////////////////////////////////////////
+//メイン処理
+////////////////////////////////////////
+$old_searchbuffer = searchbuffer;
+#old_searchoption = searchoption;
+call LoadDengakuDLL;
+if(##return){
+	call LoadDengakuColorIni;
+	if(##return){
+		call GetTempFile;
+		if(##return){
+			disabledraw;
+			disableinvert;
+			call Main;
+			//enabledraw;
+			//enableinvert;
+			call RemoveTmpFile;
+		}
+	}
+	setsearch $old_searchbuffer, #old_searchoption;
+	freedll;
+}
+endmacro;
+
+
+
+
+Main:
+	escape;
+	unfoldall;
+	deletecolormarkerall;
+	//折りたたみを維持,部分編集を維持,範囲選択,最後に移動
+	//マクロ終了時に元に戻る。
+	setcompatiblemode 0x0003|0x000c|0x0200|0x2000;
+	gofiletop;
+
+	searchdown2 "^/\\*[ \\t]*XPM[ \\t]*\\*/",regular,nocasesense,nohilight;
+	if(! result){
+		return false;
+	}
+
+	//searchdown2 "^[ \\t]*\".[^\"]+\"",regular,nohilight;
+	//searchdown2 "^\"[^\"]+\"",regular,nohilight;
+	searchdown2 "^\"[^\"]+\"",regular,nohilight,maskcomment,maskifdef;
+	if(! result){
+		return false;
+	}
+	##header_column = selendcolumn;
+	##header_lineno	= selendlineno;
+	call SelectRange ##header_column, ##header_lineno, column, lineno;
+	$$header = gettext2(seltopcolumn,seltoplineno,selendcolumn,selendlineno);
+	call TrimStr $$header;
+	$$header=$$return;
+	call ParaseHeaderStr $$header;
+	if(! ##return){
+		return false;
+	}
+	down;
+	golinetop2;
+	call StoreHeader;
+
+	if(#g_use_color_marker){
+		call ChangeColorMarker;
+	}else{
+		call ChangeColorDesign;
+	}
+	call ChangeDesign;
+	call ChangeFont;
+
+	if(#g_enable_fold){
+		call FoldPalette;
+	}
+
+	if(#g_use_color_marker){
+		//pass
+	}else{
+		call ChangeHilight;
+		if(! ##return){
+			return false;
+		}
+	}
+	return true;
+
+
+GetToken:
+	#g_tok_len  	= 0;
+	$g_tok_str[0]	= "";
+	$$str 			= $$1;
+	$$sep 			= " \t";
+
+	if(strlen($$str)){
+		$$token = dllfuncstr("GETTOKEN",$$str,$$sep);
+		while (1) {
+			if(strlen($$token)){
+				$g_tok_str[#g_tok_len] = $$token;
+				#g_tok_len = #g_tok_len + 1;
+		    }
+		    if (dllfunc("HASMORETOKENS") == 0){
+			    break;
+		    }
+		    $$token = dllfuncstr("GETTOKEN","",$$sep);
+		}
+	}
+	return ;
+
+ParaseHeaderStr:
+	$$header = $$1;
+	call GetToken $$header;
+	if(#g_tok_len < 4){
+		return false;
+	}
+	#g_width 	= val($g_tok_str[0]);
+	#g_height	= val($g_tok_str[1]);
+	#g_colors	= val($g_tok_str[2]);
+	#g_cpp		= val($g_tok_str[3]);
+	return true;
+
+/*
+"foo bar hoge" -> foo bar hoge
+*/
+TrimStr:
+	$$s = $$1;
+	$$s = dllfuncstr("RTRIM",$$s);
+	$$s = dllfuncstr("LTRIM",$$s);
+	##n = strlen($$s);
+	return midstr($$s,1,##n-2);
+
+/* c の後ろにある色を見つける
+(Ex.)
+"  s none       m none  c none",
+ "X s iconColor1 m black c black" ,
+"o s bottomShadowColor m black c #646464646464",
+"f  c #144F4D",
+*/
+GetColorCode:
+	$$other = $$1;
+	call GetToken $$other;
+	if(! #g_tok_len){
+		return false;
+	}
+	##i=0;
+	while(##i < (#g_tok_len-1)){
+		if("c"==$g_tok_str[##i]){
+			return $g_tok_str[##i+1];
+		}
+		##i=##i+1;
+	}
+	return "";
+
+PrepareHexLen:
+	##len = strlen($$1);
+	if(##len==2){
+		return $$1;
+	}
+	if(##len==1){
+		return "0"+$$1;
+	}
+	return "00";
+/*
+#123456			-> 0x00123456
+red				-> 0x00ff0000
+black			-> 0x00000000
+#00000000FFFF	-> 0x000000ff
+秀丸のconfigcolor文に合わせたカラーフォーマットで返す。
+*/
+ColorToBGR:
+	$$color = $$1;
+	if("#" == leftstr($$color,1)){
+ColorToBGR_A:
+		##len 	= strlen($$color);
+		if(##len==7){
+			//#123456 の形式（+1は先頭の#を読み飛ばすため。）
+			$$rgb 	= midstr($$color,1,##len-1);
+			$$r 	= midstr($$rgb,0,2);
+			$$g 	= midstr($$rgb,2,2);
+			$$b 	= midstr($$rgb,4,2);
+		}else{
+			//#123456789abc の形式（+1は先頭の#を読み飛ばすため。）
+			$$rgb 	= midstr($$color,1,##len-1);
+			$$r 	= hex(val("0x"+midstr($$rgb,0,4))/256);
+			$$g 	= hex(val("0x"+midstr($$rgb,4,4))/256);
+			$$b 	= hex(val("0x"+midstr($$rgb,8,4))/256);
+			//0を補う
+			call PrepareHexLen $$r; $$r=$$return;
+			call PrepareHexLen $$g; $$g=$$return;
+			call PrepareHexLen $$b; $$b=$$return;
+		}
+		return "0x00" + $$b + $$g + $$r;
+	}
+	//red/blackのように文字列で指定されている。
+	if("none"==tolower($$color)){
+		//透明色？なので背景色にして透明ぽっく見せる。
+		return str(getconfigcolor(0,1));
+	}
+
+	$$old_color = $$color;
+	$$color = dllfuncstr("CLR_GETRGB", $$old_color);
+	if(strlen($$color)){
+		goto ColorToBGR_A;
+	}else{
+		//小文字にして再挑戦する
+		$$color = dllfuncstr("CLR_GETRGB", tolower($$old_color));
+		if(strlen($$color)){
+			goto ColorToBGR_A;
+		}
+	}
+	return "0x00000000";
+
+
+ParseColorLine:
+	##i 			= ##1;
+	##old_column	= selendcolumn;
+	##old_lineno	= selendlineno;
+
+	//golineend2;
+	call SelectRange ##old_column, ##old_lineno, column, lineno;
+	$$line_str = gettext2(seltopcolumn,seltoplineno,selendcolumn,selendlineno);
+	call TrimStr $$line_str;
+	$$line_str = $$return;
+
+	$g_palette_char[##i]	= midstr($$line_str,0,#g_cpp);
+	$$other 				= midstr($$line_str,1+#g_cpp);
+	call GetColorCode $$other;
+	$$color = $$return;
+	if(0==strlen($$color)){
+		return false;
+	}
+	call ColorToBGR $$color;
+	$g_palette_color[##i] = $$return;
+	return true;
+
+StoreHeader:
+	$$base = "/"+str(#g_colors);
+	##i = 0;
+	while(##i < #g_colors){
+		if(#g_enable_progress){
+			title "パレット解析中 " + str(##i) + $$base;
+		}
+
+		finddown2;
+		if(! result){
+			return false;
+		}
+		call ParseColorLine ##i;
+		if(! ##return){
+			return false;
+		}
+		down;
+		golinetop2;
+		##i=##i+1;
+	}
+
+	//pixelの最上段を覚えておく
+	#g_pixel_top_line = lineno;
+
+	return true;
+
+ChangeFont:
+	//フォント名・フォントサイズ
+	config $g_font_config;
+
+	//太字
+	//config "b+";
+
+	return ;
+
+ChangeColorDesign:
+	if(#g_enable_progress){
+		title "デザイン変更中";
+	}
+	$$style = "[2]:0x00000000";
+	##i		= 0;
+	while(##i < #g_max_color){
+		$$color = ":" + $g_palette_color[##i];
+		$$index = "[" + $g_hilight_color_tbl[##i] + "]";
+		configcolor $$index + "[0]" + $$color;
+		configcolor $$index + "[1]" + $$color;
+		configcolor $$index + $$style;
+
+		##i=##i+1;
+	}
+	return ;
+
+ChangeDesign:
+	//画面の幅を調整(+8は多少多めのぶん)
+	##w = #g_width*#g_cpp + 8;
+	if(##w < #g_width_min){
+		//アイコンサイズ(16x16)の時に小さくなりすぎるので最小幅をもうけた。
+		##w=#g_width_min;
+	}
+	config "w"+str(##w);
+
+	//普通の文字の背景色
+	$$bgcolor = str(getconfigcolor(0,1));
+	config "z-h-d0d-a-";
+	config "xShowCR- xVertLine- xGuideLine- xOrikaeshiLine- xRuler- xLF- xUnderLine- xCharSpace- xFormLine-";
+	config "xColorUrl- xColorEmail- xColorFN- xShowEOF- xShowBox- xIndent- xKinsoku- xBlockquote- xBquoteItemized-";
+	config "xShowLineNo- xHilight+ xLastColor- xStripe- xColorNum-";
+	config "xCharSpace(0)";
+	config("y+ xActiveKakko- xColorComment:0 xImeColorCurLine:0 xCurLineColorEx:"+$$bgcolor);
+
+	//普通の部分の色
+	configcolor "[0][0]:"	+ $$bgcolor;
+	//折りたたまれた行の表示
+	configcolor "[47][0]:"	+ $$bgcolor;
+	configcolor "[47][1]:"	+ $$bgcolor;
+	//縦横のアスペクト比を「行間・文字間」で調整する。
+	config "d:0 xCharSpace:7";
+
+	return;
+
+MakeHilightString:
+	##i = 0;
+	$$s = "";
+	while(##i < #g_colors){
+		//使用可能な最大色数を超えていれば「強調表示１」に戻って同じ色を割り当てる。
+		$$col = $g_hilight_char_tbl[##i % #g_max_color];
+		$$def = $$col + $g_palette_char[##i] + "\n";
+
+		$$s = $$s + $$def;
+		##i = ##i + 1;
+	}
+	return $$s;
+
+//秀丸を使って文字列をファイルに保存する
+SaveHilightString:
+	$$str = $$1;
+	##cur_hidemaru = hidemaruhandle(0);
+
+	openfile "/h " + $g_tmp_filename, noaddhist, sjis;
+	if(!result){return false;}
+
+	##old_hidemaru = hidemaruhandle(0);
+
+	insert $$str;
+	if(!result){return false;}
+
+	save;
+	if(!result){return false;}
+
+	setactivehidemaru ##cur_hidemaru;
+	if(!result){return false;}
+
+	closehidemaruforced ##old_hidemaru;
+	return true;
+
+/*秀丸の強調表示を変更する。
+*/
+ChangeHilight:
+	if(#g_enable_progress){
+		title "強調表示の変更中";
+	}
+
+	//強調表示の文字列を作る
+	call MakeHilightString;
+	$$str = $$return;
+
+	//一時ファイルへ保存する
+	call SaveHilightString $$str;
+	if(! ##return){
+		return false;
+	}
+
+	//秀丸に「一時的な設定」で読み込む。
+	config "y+";
+	loadhilight $g_tmp_filename, 0;
+	return true;
+
+//パレット部分を折りたたむ
+FoldPalette:
+	if(#g_enable_progress){
+		title "折りたたみ中";
+	}
+
+	escape;
+	gofiletop;
+	beginsel;
+	movetolineno 1, #g_pixel_top_line;
+	golineend3;
+	endsel;
+	fold 0x0001;
+
+	//折りたたみの一行目は XMP の文字列が残っているためカラーマーカーで塗りつぶす。
+	escape;
+	gofiletop;
+	beginsel;
+	golineend3;
+	endsel;
+	##bg_color = getconfigcolor(0,1);
+	colormarker ##bg_color, ##bg_color, 0, 2;
+	return ;
+
+
+MakeRegExp:
+	$$find_str	= $$1;
+	$$reg_str 	= "";
+	##len 		= strlen($$find_str);
+	##i 		= 0;
+	while(##i < ##len){
+		$$c = midstr($$find_str,##i,1);
+		if(-1 == strstr("[]()^$.*+?|=!\\", $$c)){
+			$$reg_str = $$reg_str + $$c;
+		}else{
+			$$reg_str = $$reg_str + "\\" + $$c;
+		}
+		##i = ##i + 1;
+	}
+	$$reg_str = "(" + $$reg_str + ")+";
+	return $$reg_str;
+
+/*
+メモ：置換する範囲
+#g_width==4のとき
+123456		<- column
+"abcd"		<- XPM内容
+*/
+ChangeColorMarkerOne_Word:
+	$$find_str		= $$1;
+	##color			= val($$2);
+	##w				= 1 + (#g_width*#g_cpp);
+	##last_lineno 	= #g_pixel_top_line + #g_height;
+
+	searchdown2 $$find_str,noregular,casesense,nohilight;
+	while(result && (lineno<=##last_lineno)){
+		//行末の , には着色しない。
+		if(seltopcolumn<=##w){
+			if(1==#g_cpp){
+				//pass
+			}else if(2==#g_cpp){
+				if(0 == (seltopcolumn % #g_cpp)){
+					goto ChangeColorMarkerOne_Word_NEXT;
+				}
+			}
+			##cur_selendcolumn = selendcolumn;
+			colormarker ##color, ##color, 0, 2;
+			movetolineno 1+##cur_selendcolumn, selendlineno;
+		}
+
+		ChangeColorMarkerOne_Word_NEXT:
+		finddown2;
+	}
+	return ;
+
+
+ChangeColorMarkerOne_Reg:
+	$$find_str	= $$1;
+	##color		= val($$2);
+	##w				= 1 + (#g_width*#g_cpp);
+	##last_lineno 	= #g_pixel_top_line + #g_height;
+
+	call MakeRegExp $$find_str;
+	$$reg_str 	= $$return;
+	searchdown2 $$reg_str,regular,casesense,nohilight;
+
+	while(result && (lineno<=##last_lineno)){
+		//行末の , には着色しない。
+		if(seltopcolumn<=##w){
+			if(1==#g_cpp){
+				//pass
+			}else if(2==#g_cpp){
+				if(0 == (seltopcolumn % #g_cpp)){
+					goto ChangeColorMarkerOne_Reg_NEXT;
+				}
+			}
+			##cur_selendcolumn = selendcolumn;
+			colormarker ##color, ##color, 0, 2;
+			movetolineno 1+##cur_selendcolumn, selendlineno;
+		}
+
+		ChangeColorMarkerOne_Reg_NEXT:
+		finddown2;
+	}
+	return ;
+
+//カラーマーカーで文字を塗る（24ビットカラーが使える）
+ChangeColorMarker:
+	$$base		= "/" + str(#g_colors);
+	##i 		= 0;
+	##top_lineno= 1 + #g_pixel_top_line;
+	while(##i < #g_colors){
+		if(#g_enable_progress){
+			title("カラーマーカー " + str(##i) + $$base);
+		}
+		movetolineno 1, ##top_lineno;
+
+		//地道に色つけを行なう（正確な動作を行なうリファレンス版）
+		//call ChangeColorMarkerOne_Word $g_palette_char[##i], $g_palette_color[##i];
+		call ChangeColorMarkerOne_Reg $g_palette_char[##i], $g_palette_color[##i];
+		##i = ##i + 1;
+	}
+	return ;
+
+
+SelectRange:
+	escape;
+	movetolineno 1+##1, ##2;
+	beginsel;
+	movetolineno 1+##3, ##4;
+	endsel;
+	return ;
+
+LoadDengakuDLL:
+	loaddll hidemarudir + "\\DengakuDLL.dll";
+	if (!result) {
+		message "DengakuDLL.dll をロードできませんでした。";
+		return false;
+	}
+	//	ＤＬＬのバージョンチェック
+	$$DLLVer = dllfuncstr("GETVERSION");
+	if (val(leftstr($$DLLVer, 1)) < 2) {
+		message "このマクロの実行には Ver.2.00 以降の田楽ＤＬＬが必要です。";
+		freedll;
+		return false;
+	}
+
+	return true;
+
+LoadDengakuColorIni:
+	$$fn = currentmacrodirectory+"\\"+$g_dengaku_color_ini;
+	if(! existfile($$fn)){
+		message("ファイルが見つかりません、もう一度インストールしてみてください。\n" + "【見つからないファイル】\n" + $$fn);
+		return false;
+	}
+	##n = dllfunc("CLR_LOAD", $$fn);
+	return true;
+
+//テンポラリファイル作成サブルーチン
+GetTempFile:
+	$$tempdir = getenv("tmp");
+	if( leftstr( $$tempdir, 1 ) != "\\" ) {
+		$$tempdir = $$tempdir + "\\";
+	}
+	##n		= tickcount;
+	##end 	= ##n + 1000;
+	while(##n < ##end){
+	 	$$tempfile = $$tempdir + $g_tmpfile_base_name + str(##n);
+	 	if( !existfile( $$tempfile ) ) {
+			$g_tmp_filename = $$tempfile;
+			return true;
+		}
+	 	##n = ##n + 1;
+	}
+	message "テンポラリファイルが作成できません\n" + $$tempfile;
+	return false;
+
+RemoveTmpFile:
+	if(strlen($g_tmp_filename)){
+		if(existfile($g_tmp_filename)){
+			deletefile $g_tmp_filename;
+			$g_tmp_filename="";
+		}
+	}
+	return ;
+
